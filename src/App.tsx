@@ -31,7 +31,7 @@ import { KioskPage } from './components/KioskPage';
 const DEFAULT_BAND_LOGO = "https://www.fusion-events.ca/wp-content/uploads/2025/03/ulr-wordmark.png";
 const BACKEND_PATH = "backend";
 const KIOSK_PATH = "kiosk";
-const MAX_PHOTO_SIZE = 300 * 1024; // 300KB limit for photos
+const MAX_PHOTO_SIZE = 1024 * 1024; // 1MB limit for photos (increased for smartphone support)
 const MAX_REQUEST_RETRIES = 3;
 
 function App() {
@@ -69,6 +69,64 @@ function App() {
   const { isLoading: isFetchingSongs } = useSongSync(setSongs);
   const { isLoading: isFetchingRequests, reconnect: reconnectRequests } = useRequestSync(setRequests);
   const { isLoading: isFetchingSetLists, refetch: refreshSetLists } = useSetListSync(setSetLists);
+
+  // Enhanced photo compression function
+  const compressPhoto = useCallback((file: File, maxSizeKB: number = 1024): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+
+      img.onload = () => {
+        try {
+          // Calculate dimensions to maintain aspect ratio
+          const maxWidth = 800;
+          const maxHeight = 800;
+          let { width, height } = img;
+
+          if (width > height) {
+            if (width > maxWidth) {
+              height = (height * maxWidth) / width;
+              width = maxWidth;
+            }
+          } else {
+            if (height > maxHeight) {
+              width = (width * maxHeight) / height;
+              height = maxHeight;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+
+          // Draw and compress
+          ctx?.drawImage(img, 0, 0, width, height);
+
+          // Try different quality levels to meet size requirement
+          let quality = 0.9;
+          let result: string;
+
+          do {
+            result = canvas.toDataURL('image/jpeg', quality);
+            const sizeKB = (result.length * 3) / 4 / 1024;
+            
+            if (sizeKB <= maxSizeKB || quality <= 0.1) {
+              break;
+            }
+            
+            quality -= 0.1;
+          } while (quality > 0.1);
+
+          resolve(result);
+        } catch (error) {
+          reject(new Error('Failed to compress image'));
+        }
+      };
+
+      img.onerror = () => reject(new Error('Failed to load image'));
+      img.src = URL.createObjectURL(file);
+    });
+  }, []);
 
   // Global error handler for unhandled promise rejections
   useEffect(() => {
@@ -247,15 +305,73 @@ function App() {
     toast.success('Logged out successfully');
   }, [navigateToFrontend]);
   
-  // Handle user update
-  const handleUserUpdate = useCallback((user: User) => {
-    setCurrentUser(user);
+  // Handle user update with enhanced photo support
+  const handleUserUpdate = useCallback(async (user: User, photoFile?: File) => {
     try {
-      localStorage.setItem('currentUser', JSON.stringify(user));
-    } catch (e) {
-      console.error('Error saving user to localStorage:', e);
+      let finalUser = { ...user };
+
+      // Handle photo upload if provided
+      if (photoFile) {
+        try {
+          // Validate file type
+          const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+          if (!allowedTypes.includes(photoFile.type)) {
+            throw new Error('Please select a JPEG, PNG, or WebP image file');
+          }
+
+          // Check file size (10MB limit before compression)
+          if (photoFile.size > 10 * 1024 * 1024) {
+            throw new Error('Image file is too large. Please select an image smaller than 10MB');
+          }
+
+          // Compress the photo to 1MB limit (matching RequestModal)
+          const compressedPhoto = await compressPhoto(photoFile, 1024);
+          finalUser.photo = compressedPhoto;
+
+          toast.success('📱 Photo uploaded and optimized for all smartphone cameras!');
+        } catch (photoError) {
+          console.error('Photo processing error:', photoError);
+          toast.error(photoError instanceof Error ? photoError.message : 'Failed to process photo');
+          return;
+        }
+      }
+
+      // Validate final user data
+      if (!finalUser.name.trim()) {
+        toast.error('Please enter your name');
+        return;
+      }
+
+      // Enhanced photo size validation for smartphone support (matching RequestModal)
+      if (finalUser.photo && finalUser.photo.startsWith('data:')) {
+        const base64Length = finalUser.photo.length - (finalUser.photo.indexOf(',') + 1);
+        const size = (base64Length * 3) / 4;
+        
+        // Updated to 1MB limit to support smartphone photos after compression
+        const maxSize = 1024 * 1024; // 1MB
+        if (size > maxSize) {
+          toast.error(`Your profile photo is too large (${Math.round(size/1024)}KB). Please use a smaller image (max ${Math.round(maxSize/1024)}KB).`);
+          return;
+        }
+      }
+
+      // Update user state and save to localStorage
+      setCurrentUser(finalUser);
+      
+      try {
+        localStorage.setItem('currentUser', JSON.stringify(finalUser));
+      } catch (e) {
+        console.error('Error saving user to localStorage:', e);
+        // Still proceed even if localStorage fails
+        toast.warning('Profile updated but could not be saved locally');
+      }
+      
+      toast.success('Profile updated successfully!');
+    } catch (error) {
+      console.error('Error updating user:', error);
+      toast.error('Failed to update profile. Please try again.');
     }
-  }, []);
+  }, [compressPhoto]);
 
   // Handle logo click
   const onLogoClick = useCallback(() => {
@@ -286,7 +402,7 @@ function App() {
     return `data:image/svg+xml;base64,${btoa(svg)}`;
   };
 
-  // Handle song request submission with retry logic
+  // Handle song request submission with retry logic and enhanced photo support
   const handleSubmitRequest = useCallback(async (data: RequestFormData): Promise<boolean> => {
     if (requestInProgressRef.current) {
       console.log('Request already in progress, please wait...');
@@ -299,9 +415,16 @@ function App() {
     try {
       console.log('Submitting request:', data);
       
-      // Validate photo size if provided
-      if (data.userPhoto && data.userPhoto.length > MAX_PHOTO_SIZE) {
-        throw new Error('Profile photo is too large. Please use a smaller image (max 300KB).');
+      // Enhanced photo size validation for smartphone support (matching RequestModal)
+      if (data.userPhoto && data.userPhoto.startsWith('data:')) {
+        const base64Length = data.userPhoto.length - (data.userPhoto.indexOf(',') + 1);
+        const size = (base64Length * 3) / 4;
+        
+        // Updated to 1MB limit to support smartphone photos after compression
+        const maxSize = 1024 * 1024; // 1MB
+        if (size > maxSize) {
+          throw new Error(`Your profile photo is too large (${Math.round(size/1024)}KB). Please go back and update your profile with a smaller image (max ${Math.round(maxSize/1024)}KB).`);
+        }
       }
 
       // First check if the song is already requested - use maybeSingle() instead of single()
@@ -419,7 +542,7 @@ function App() {
     } finally {
       requestInProgressRef.current = false;
     }
-  }, [reconnectRequests]);
+  }, [reconnectRequests, compressPhoto]);
 
   // Handle request vote with error handling
   const handleVoteRequest = useCallback(async (id: string): Promise<boolean> => {
@@ -892,7 +1015,7 @@ function App() {
   if (isInitializing) {
     return (
       <div className="min-h-screen bg-darker-purple flex items-center justify-center">
-        <LoadingSpinner size="lg\" message="Loading application..." />
+        <LoadingSpinner size="lg" message="Loading application..." />
       </div>
     );
   }
