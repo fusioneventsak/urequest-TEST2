@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { X, Music4, AlertTriangle } from 'lucide-react';
 import type { Song, User } from '../types';
+import { resizeAndCompressImage } from '../utils/imageUtils';
 
 interface RequestModalProps {
   isOpen: boolean;
@@ -23,40 +24,28 @@ export function RequestModal({
 
   if (!isOpen) return null;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-    setError(null);
-
-    try {
-      // Validate user data
-      if (!currentUser.name) {
-        throw new Error('User name is required');
+  // Helper function to compress user photo to small thumbnail
+  const compressUserPhoto = (photoUrl: string): Promise<string> => {
+    return new Promise((resolve) => {
+      if (!photoUrl || !photoUrl.startsWith('data:')) {
+        resolve(photoUrl); // Return as-is if not base64
+        return;
       }
 
-      // Enhanced photo size validation for smartphone support
-      if (currentUser.photo && currentUser.photo.startsWith('data:')) {
-        const base64Length = currentUser.photo.length - (currentUser.photo.indexOf(',') + 1);
-        const size = (base64Length * 3) / 4;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
         
-        // Updated to 1MB limit to support smartphone photos after compression
-        const maxSize = 1024 * 1024; // 1MB
-        if (size > maxSize) {
-          throw new Error(`Your profile photo is too large (${Math.round(size/1024)}KB). Please go back and update your profile with a smaller image (max ${Math.round(maxSize/1024)}KB).`);
-        }
-      }
-      
-      // Ensure message is properly trimmed and truncated
-      const truncatedMessage = message.trim().slice(0, 100);
-      
-      const requestData = {
-        title: song.title,
-        artist: song.artist || '',
-        requestedBy: currentUser.name,
-        userPhoto: currentUser.photo,
-        message: truncatedMessage,
-        userId: currentUser.id || currentUser.name
-      };
+        // Small thumbnail size for requests (40x40px like in the UI)
+        const size = 40;
+        canvas.width = size;
+        canvas.height = size;
+        
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, size, size);
+          // Lower quality for smaller file size
+          const compressedPhoto = canvas.toDataURL('image/jpeg', 0.6
 
       console.log("Submitting request with data:", requestData);
       
@@ -79,10 +68,10 @@ export function RequestModal({
           errorMessage = 'Too many requests. Please try again later.';
         } else if (error.message.includes('duplicate')) {
           errorMessage = 'This song has already been requested.';
-        } else if (error.message.includes('photo is too large')) {
-          errorMessage = error.message;
         } else if (error.message.includes('User name is required')) {
           errorMessage = 'Please provide your name before submitting a request.';
+        } else if (error.message.includes('photo')) {
+          errorMessage = 'There was an issue with your profile photo. The request was submitted without it.';
         } else if (error.message.includes('already requested')) {
           errorMessage = error.message;
         } else if (error.message.includes('Missing required fields')) {
@@ -204,11 +193,10 @@ export function RequestModal({
           </div>
         </form>
 
-        {/* Enhanced photo support notice */}
+        {/* Updated notice to reflect thumbnail usage */}
         <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-md">
           <p className="text-blue-300 text-xs">
-            📱 Your profile supports high-quality photos from all smartphone cameras (iPhone, Samsung, Google Pixel, etc.). 
-            All images are automatically compressed for optimal performance.
+            📱 Your profile photo will be included as a small thumbnail with your request for easy identification in the queue.
           </p>
         </div>
       </div>
