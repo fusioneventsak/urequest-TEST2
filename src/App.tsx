@@ -31,7 +31,7 @@ import { KioskPage } from './components/KioskPage';
 const DEFAULT_BAND_LOGO = "https://www.fusion-events.ca/wp-content/uploads/2025/03/ulr-wordmark.png";
 const BACKEND_PATH = "backend";
 const KIOSK_PATH = "kiosk";
-const MAX_PHOTO_SIZE = 1024 * 1024; // 1MB limit for photos (increased for smartphone support)
+const MAX_PHOTO_SIZE = 250 * 1024; // 250KB limit for database storage
 const MAX_REQUEST_RETRIES = 3;
 
 function App() {
@@ -70,8 +70,8 @@ function App() {
   const { isLoading: isFetchingRequests, reconnect: reconnectRequests } = useRequestSync(setRequests);
   const { isLoading: isFetchingSetLists, refetch: refreshSetLists } = useSetListSync(setSetLists);
 
-  // Enhanced photo compression function
-  const compressPhoto = useCallback((file: File, maxSizeKB: number = 1024): Promise<string> => {
+  // Enhanced photo compression function with aggressive compression for database storage
+  const compressPhoto = useCallback((file: File, maxSizeKB: number = 200): Promise<string> => {
     return new Promise((resolve, reject) => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
@@ -79,11 +79,12 @@ function App() {
 
       img.onload = () => {
         try {
-          // Calculate dimensions to maintain aspect ratio
-          const maxWidth = 800;
-          const maxHeight = 800;
+          // More aggressive size limits for database storage
+          const maxWidth = 400;  // Reduced from 800
+          const maxHeight = 400; // Reduced from 800
           let { width, height } = img;
 
+          // Calculate new dimensions maintaining aspect ratio
           if (width > height) {
             if (width > maxWidth) {
               height = (height * maxWidth) / width;
@@ -99,23 +100,47 @@ function App() {
           canvas.width = width;
           canvas.height = height;
 
-          // Draw and compress
-          ctx?.drawImage(img, 0, 0, width, height);
+          // Draw with better quality settings
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, width, height);
+          }
 
-          // Try different quality levels to meet size requirement
-          let quality = 0.9;
+          // Start with lower quality and be more aggressive
+          let quality = 0.7; // Start lower
           let result: string;
 
           do {
             result = canvas.toDataURL('image/jpeg', quality);
             const sizeKB = (result.length * 3) / 4 / 1024;
             
-            if (sizeKB <= maxSizeKB || quality <= 0.1) {
+            console.log(`Compression attempt: ${Math.round(sizeKB)}KB at quality ${quality.toFixed(2)}`);
+            
+            if (sizeKB <= maxSizeKB || quality <= 0.05) {
               break;
             }
             
-            quality -= 0.1;
-          } while (quality > 0.1);
+            quality -= 0.05; // Smaller steps for more precision
+          } while (quality > 0.05);
+
+          const finalSizeKB = (result.length * 3) / 4 / 1024;
+          console.log(`Final compressed size: ${Math.round(finalSizeKB)}KB`);
+
+          // If still too large, try WebP format (better compression)
+          if (finalSizeKB > maxSizeKB) {
+            quality = 0.6;
+            do {
+              result = canvas.toDataURL('image/webp', quality);
+              const sizeKB = (result.length * 3) / 4 / 1024;
+              
+              if (sizeKB <= maxSizeKB || quality <= 0.1) {
+                break;
+              }
+              
+              quality -= 0.1;
+            } while (quality > 0.1);
+          }
 
           resolve(result);
         } catch (error) {
@@ -324,11 +349,11 @@ function App() {
             throw new Error('Image file is too large. Please select an image smaller than 10MB');
           }
 
-          // Compress the photo to 1MB limit (matching RequestModal)
-          const compressedPhoto = await compressPhoto(photoFile, 1024);
+          // Compress the photo to 200KB limit for database storage
+          const compressedPhoto = await compressPhoto(photoFile, 200);
           finalUser.photo = compressedPhoto;
 
-          toast.success('📱 Photo uploaded and optimized for all smartphone cameras!');
+          toast.success('📱 Photo uploaded and optimized for database storage!');
         } catch (photoError) {
           console.error('Photo processing error:', photoError);
           toast.error(photoError instanceof Error ? photoError.message : 'Failed to process photo');
@@ -342,15 +367,14 @@ function App() {
         return;
       }
 
-      // Enhanced photo size validation for smartphone support (matching RequestModal)
+      // Enhanced photo size validation for database storage
       if (finalUser.photo && finalUser.photo.startsWith('data:')) {
         const base64Length = finalUser.photo.length - (finalUser.photo.indexOf(',') + 1);
-        const size = (base64Length * 3) / 4;
+        const sizeKB = (base64Length * 3) / 4 / 1024;
         
-        // Updated to 1MB limit to support smartphone photos after compression
-        const maxSize = 1024 * 1024; // 1MB
-        if (size > maxSize) {
-          toast.error(`Your profile photo is too large (${Math.round(size/1024)}KB). Please use a smaller image (max ${Math.round(maxSize/1024)}KB).`);
+        // 250KB limit for database storage
+        if (sizeKB > 250) {
+          toast.error(`Profile photo is too large (${Math.round(sizeKB)}KB). Maximum size is 250KB for database storage.`);
           return;
         }
       }
@@ -415,15 +439,14 @@ function App() {
     try {
       console.log('Submitting request:', data);
       
-      // Enhanced photo size validation for smartphone support (matching RequestModal)
+      // Enhanced photo size validation for database storage
       if (data.userPhoto && data.userPhoto.startsWith('data:')) {
         const base64Length = data.userPhoto.length - (data.userPhoto.indexOf(',') + 1);
-        const size = (base64Length * 3) / 4;
+        const sizeKB = (base64Length * 3) / 4 / 1024;
         
-        // Updated to 1MB limit to support smartphone photos after compression
-        const maxSize = 1024 * 1024; // 1MB
-        if (size > maxSize) {
-          throw new Error(`Your profile photo is too large (${Math.round(size/1024)}KB). Please go back and update your profile with a smaller image (max ${Math.round(maxSize/1024)}KB).`);
+        // 250KB limit for database storage
+        if (sizeKB > 250) {
+          throw new Error(`Your profile photo is too large (${Math.round(sizeKB)}KB). Please go back and update your profile with a smaller image (max 250KB).`);
         }
       }
 
