@@ -24,28 +24,48 @@ export function RequestModal({
 
   if (!isOpen) return null;
 
-  // Helper function to compress user photo to small thumbnail
-  const compressUserPhoto = (photoUrl: string): Promise<string> => {
-    return new Promise((resolve) => {
-      if (!photoUrl || !photoUrl.startsWith('data:')) {
-        resolve(photoUrl); // Return as-is if not base64
-        return;
-      }
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSubmitting(true);
+    setError(null);
 
-      const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        
-        // Small thumbnail size for requests (40x40px like in the UI)
-        const size = 40;
-        canvas.width = size;
-        canvas.height = size;
-        
-        if (ctx) {
-          ctx.drawImage(img, 0, 0, size, size);
-          // Lower quality for smaller file size
-          const compressedPhoto = canvas.toDataURL('image/jpeg', 0.6
+    try {
+      // Validate user data
+      if (!currentUser.name) {
+        throw new Error('User name is required');
+      }
+      
+      // Ensure message is properly trimmed and truncated
+      const truncatedMessage = message.trim().slice(0, 100);
+      
+      // Create a small thumbnail of the user photo for the request
+      let userPhotoThumbnail = '';
+      if (currentUser.photo && currentUser.photo.startsWith('data:')) {
+        try {
+          // Create a very small thumbnail (40x40px) with high compression for minimal payload
+          userPhotoThumbnail = await resizeAndCompressImage(
+            currentUser.photo,
+            40, // Small width for thumbnail
+            40, // Small height for thumbnail  
+            0.6 // Lower quality for smaller size
+          );
+        } catch (photoError) {
+          console.warn('Failed to compress user photo for request:', photoError);
+          // Continue without photo if compression fails
+        }
+      } else if (currentUser.photo) {
+        // If it's already a URL (not base64), use it as-is
+        userPhotoThumbnail = currentUser.photo;
+      }
+      
+      const requestData = {
+        title: song.title,
+        artist: song.artist || '',
+        requestedBy: currentUser.name,
+        userPhoto: userPhotoThumbnail, // Small compressed thumbnail
+        message: truncatedMessage,
+        userId: currentUser.id || currentUser.name
+      };
 
       console.log("Submitting request with data:", requestData);
       
